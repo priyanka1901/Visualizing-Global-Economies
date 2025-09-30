@@ -61,7 +61,7 @@ To reveal more granular, neighborhood-level similarities, the t-SNE projection p
     ```sh
     git clone [https://github.com/your-username/gdp-visualization-pca.git](https://github.com/your-username/gdp-visualization-pca.git)
     ```
-2.  **Open the R Markdown file** (`MATH 250 Final Project.Rmd`) in RStudio.
+2.  **Open the R Markdown file** (`gdp-visualization-pca.Rmd`) in RStudio.
 
 3.  **Install the required packages:**
     ```R
