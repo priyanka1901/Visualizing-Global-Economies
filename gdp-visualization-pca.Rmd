@@ -1,0 +1,713 @@
+---
+title: "PCA on GDP Per Capita Data"
+output: html_document
+---
+
+```{r setup}
+library(ggplot2)
+library(dplyr)
+library(Rtsne)
+library(tidyr)
+library(factoextra)
+library(ggrepel)
+library(dplyr)
+```
+
+# Load and Prepare Data
+
+```{r}
+
+gdp_data <- data %>%
+  select(-Country, -Region) %>%
+  as.matrix()
+```
+
+# Missing Values Check
+
+```{r}
+colSums(is.na(data))  # Total NAs per column
+```
+
+# Correlation Check
+```{r}
+cor_matrix <- cor(gdp_data)
+
+cor_df <- reshape2::melt(cor_matrix)
+
+melted_cormat <- cor_df %>%
+  filter(as.integer(gsub("year_", "", Var1)) >= as.integer(gsub("year_", "", Var2)))
+
+ggplot(data = melted_cormat, aes(x = Var1, y = Var2, fill = value)) + 
+  geom_tile() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1),
+        axis.title = element_blank(),
+        panel.grid = element_blank()) +
+  coord_fixed() +
+  ggtitle("Correlation Heatmap of GDP per Capita (2000–2023)")
+```
+Data is highly correlated indicating strong linear relationships between GDP values across years.
+
+The GDP per capita values across years are highly correlated, which is expected since economic trajectories typically follow continuous trends.
+
+This confirms that PCA is appropriate for capturing major directions of variation.
+
+To evaluate the distributional properties of the data, we compute the skewness for each year from 1990 to 2023. Skewness measures the asymmetry of a distribution:
+
+# Skewness Plot
+
+```{r}
+
+data_avg <- data %>%
+  mutate(mean_gdp = rowMeans(select(., starts_with("year_"))))
+
+
+top10 <- data_avg %>% arrange(desc(mean_gdp)) %>% slice(1:10)
+bottom10 <- data_avg %>% arrange(mean_gdp) %>% slice(1:10)
+
+
+top_bottom <- bind_rows(
+  top10 %>% mutate(Group = "Top 10 (Log Scale)"),
+  bottom10 %>% mutate(Group = "Bottom 10 (Log Scale)")
+)
+
+ggplot(top_bottom, aes(x = reorder(Country, mean_gdp), y = mean_gdp, fill = Group)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Countries with Highest and Lowest Log-Average GDP per Capita",
+       x = "Country", y = "Log(Average GDP per Capita)") +
+  theme_minimal()
+```
+
+**Interpretation**
+The bar plot above illustrates the top 10 and bottom 10 countries based on their average GDP per capita from 1990 to 2023. It highlights the extreme disparity between high-income and low-income countries.
+
+Countries like Luxembourg, Qatar, and Bermuda consistently show exceptionally high GDP per capita — exceeding $100,000 on average. In contrast, countries such as Somalia, Burundi, and the Democratic Republic of Congo have average GDP per capita well below $1,000.
+
+This plot confirms that the data is heavily right-skewed, with a long tail driven by a small group of ultra-wealthy nations. Such skewness can distort the results of statistical techniques like PCA or FA, where high-variance features disproportionately influence the components or factors. Therefore, this justifies the need for data transformation, particularly a logarithmic transformation, to stabilize variance and reduce the influence of extreme values before applying dimensionality reduction techniques.
+
+PCA is a descriptive, non-parametric technique that does not assume normality.Even if PCA doesn't care about distribution shape, extreme values (e.g., Cayman Islands) can dominate the principal components, leading to:
+
+PCs that reflect magnitude, not structure
+
+Unequal variance contributions across variables
+
+Log transformation reduces the influence of extreme values and makes the data more "regular".
+
+```{r}
+
+data_log <- data %>%
+  mutate(across(starts_with("year_"), log))
+
+data_log <- data_log %>%
+  mutate(mean_log_gdp = rowMeans(select(., starts_with("year_"))))
+
+
+top10_log <- data_log %>% arrange(desc(mean_log_gdp)) %>% slice(1:10)
+bottom10_log <- data_log %>% arrange(mean_log_gdp) %>% slice(1:10)
+
+
+top_bottom_log <- bind_rows(
+  top10_log %>% mutate(Group = "Top 10 (Log Scale)"),
+  bottom10_log %>% mutate(Group = "Bottom 10 (Log Scale)")
+)
+
+ggplot(top_bottom_log, aes(x = reorder(Country, mean_log_gdp), y = mean_log_gdp, fill = Group)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Countries with Highest and Lowest Log-Average GDP per Capita",
+       x = "Country", y = "Log(Average GDP per Capita)") +
+  theme_minimal()
+```
+
+After applying a logarithmic transformation to the GDP per capita values, the resulting bar plot shows the same rank order of countries, but the differences in magnitude are compressed. This confirms that log transformation stabilizes the variance and reduces the impact of extreme outliers like Luxembourg and Qatar.
+
+More importantly, countries with mid- to low-income levels are now more distinguishable, revealing meaningful variation that was previously overshadowed in the raw scale. This transformation makes the dataset more suitable for Principal Component Analysis (PCA) and Factor Analysis (FA), as it aligns better with their assumptions about scale and variance. Without this step, the first few components or factors would be biased toward explaining variance dominated solely by the richest countries.
+
+```{r}
+# Convert to long format
+df_long <- data %>%
+  pivot_longer(cols = starts_with("year_"), names_to = "Year", values_to = "GDP") %>%
+  mutate(Year = as.numeric(gsub("year_", "", Year)))
+
+# Filter for a few example countries
+selected <- c("India", "United States", "China", "Germany", "Brazil", "Russia", "Japan", "Vietnam", "United Kingdom","Djibouti")
+
+ggplot(df_long %>% filter(Country %in% selected), aes(x = Year, y = GDP, color = Country)) +
+  geom_line(size = 1) +
+  labs(title = "GDP per Capita Over Time", y = "GDP per Capita") +
+  theme_minimal()
+
+```
+
+
+```{r}
+data_matrix <- log(gdp_data)
+```
+
+```{r}
+# Since the sample variances are different, we need to scale the data
+variances <- apply(data_matrix, 2, var)
+
+variances
+```
+
+```{r}
+cor_matrix <- cor(data_matrix)
+
+cor_df <- reshape2::melt(cor_matrix)
+
+melted_cormat <- cor_df %>%
+  filter(as.integer(gsub("year_", "", Var1)) >= as.integer(gsub("year_", "", Var2)))
+
+ggplot(data = melted_cormat, aes(x = Var1, y = Var2, fill = value)) + 
+  geom_tile() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1),
+        axis.title = element_blank(),
+        panel.grid = element_blank()) +
+  coord_fixed() +
+  ggtitle("Correlation Heatmap of GDP per Capita (2000–2023)")
+```
+PCA leverages correlation: It identifies new axes (principal components) that explain the maximum variance in the data, which only makes sense when variables (years) are correlated.
+
+High correlation means countries’ GDP trajectories are smooth over time, and there's shared structure across years — perfect for PCA and Factor Analysis.
+
+The first principal component will likely capture the overall GDP growth level, while the second may capture growth rate differences or responses to global events (e.g., 2008 crisis, 2020 pandemic).
+
+```{r}
+rownames(data_matrix) <- data$Country
+```
+
+# Principal Component Analysis (PCA)
+
+```{r}
+pca_result <- prcomp(data_matrix, scale. = TRUE)
+
+# PCA Summary
+summary(pca_result)
+
+```
+* PCA looks for directions (called principal components) where the data varies the most.
+
+PC1 Dominates the Variance
+
+Proportion of variance explained: 97.13%
+
+PC1 alone explains almost all the variation in your data. This implies that most countries follow a very similar pattern in GDP per capita trends over time, with one dominant underlying direction (e.g., overall economic growth trend).
+
+PC2 Adds Modest Information
+
+Explains another 2% of the variance.
+
+Now, with PC1 + PC2, you capture 99.13% of total variation.
+
+This makes a 2D PCA plot meaningful: you can visualize almost all the structure in just two dimensions.
+
+    
+## Scree Plot
+```{r}
+library(factoextra)
+fviz_eig(pca_result, addlabels = TRUE)
+```
+
+* PC1 is the first, strongest direction: the line or axis along which the data points spread out the most. It explains 97% of the variance, it means almost all the differences between countries in our dataset can be described just by how far they are along that one axis.
+
+    + most of the differences among countries in our data can be "summarized" by a single number — the value along PC1.
+    
+    + it suggests that countries mainly differ by how rich or poor they are. it's mostly one big gradient from very poor to very rich countries.
+
+* GDP per capita data is very strongly dominated by a single principal component (PC1), which makes sense — countries' GDP per capita might differ mainly along a single overall wealth axis.
+
+```{r}
+# Square root of eigenvalues - singular values
+pca_result$sdev
+```
+
+```{r}
+# First three principal directions
+pca_result$rotation[, 1:3]
+```
+PC1 (Principal Component 1):
+All loadings are positive and very similar (around 0.17).
+
+This means PC1 is essentially the average GDP per capita across all years.
+
+It reflects the overall economic level of a country — high PC1 score = generally richer country across time.
+
+PC2 (Principal Component 2):
+Starts negative for earlier years and becomes positive for recent years.
+
+This suggests PC2 captures a temporal contrast:
+
+Countries with rising GDPs (low early, high recent) will have high PC2 scores.
+
+Countries with declining or stagnant GDPs will have low or negative PC2 scores.
+
+So, PC2 reflects economic growth trajectory.
+
+Shows non-monotonic patterns, peaking in the early 2000s, then reversing.
+
+This component may capture cyclical or transient deviations, like effects of financial crises, recoveries, or mid-period booms.
+
+It’s harder to interpret directly, and explains only a very small variance.
+
+```{r}
+# Extract loadings (also called "rotation" in prcomp)
+loadings_df <- as.data.frame(pca_result$rotation[, 1:2])
+loadings_df$Year <- rownames(loadings_df)
+
+loadings_long <- loadings_df %>%
+  pivot_longer(cols = c(PC1, PC2), names_to = "Component", values_to = "Loading")
+
+# Plot loadings over time for PC1, PC2
+ggplot(loadings_long, aes(x = Year, y = Loading, group = Component, color = Component)) +
+  geom_line(size = 1.2) +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "PCA Loadings by Year for First Three Components",
+       x = "Year", y = "Loading Value") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank())
+
+```
+
+# PCA Visualization
+
+PC1 axis (horizontal):
+
+Countries to the right (positive PC1) are wealthier overall.
+
+Countries to the left (negative PC1) are poorer overall.
+
+PC2 axis (vertical):
+
+Countries higher up (positive PC2) probably had higher GDP in earlier years compared to later years (maybe stagnated or declined).
+
+Countries lower down (negative PC2) possibly improved or grew more in recent years compared to their earlier GDP.
+
+```{r}
+library(ggplot2)
+library(plotly)
+
+scores <- as.data.frame(pca_result$x)
+scores$Country <- data$Country 
+
+p <- ggplot(scores, aes(x = PC1, y = PC2, label = Country, color = PC1)) +
+  geom_point( size = 2) +
+  scale_color_gradient(low = "blue", high = "red") + # low PC1 = blue , high PC1 = red 
+  labs(title = "PCA: Countries plotted on PC1 vs PC2",
+       x = "PC1 (Overall Wealth)", 
+       y = "PC2 (Early vs Recent Performance)") +
+  theme_minimal()
+
+ggplotly(p, tooltip = c("label", "x", "y"))
+
+```
+
+```{r}
+library(ggplot2)
+library(plotly)
+
+# Select countries to highlight
+scores$Region <- data$Region
+highlight_countries <- c("India", "China", "United States", "Bermuda","Luxembourg", "Switzerland", "Brunei", "United Arab Emirates", "Singapore", "Somalia", "Burundi")
+
+highlight_df <- scores[scores$Country %in% highlight_countries, ]
+highlight_df$xend <- highlight_df$PC1 + 0.5
+highlight_df$yend <- highlight_df$PC2 + 0.5
+
+# Base plot
+p <- ggplot(scores, aes(x = PC1, y = PC2, color = Region)) +
+  geom_point(size = 2, alpha = 0.7) +
+
+  # Add leader lines
+  geom_segment(
+    data = highlight_df,
+    aes(x = PC1, y = PC2, xend = xend, yend = yend),
+    color = "gray40", linetype = "dotted"
+  ) +
+
+  # Add labels
+  geom_text(
+    data = highlight_df,
+    aes(x = xend, y = yend, label = Country),
+    size = 3.5,
+    fontface = "bold"
+  ) +
+
+  theme_minimal() +
+  labs(
+    title = "PCA of GDP per Capita (1990–2023)",
+    x = "PC1: Overall GDP Level",
+    y = "PC2: Growth vs. Stagnation Trend"
+  ) +
+  theme(
+    legend.position = "bottom",
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, face = "bold")
+  )
+
+ggplotly(p, tooltip = c("label", "x", "y"))
+
+```
+
+PC1 (x-axis): Represents overall GDP level — countries on the right are wealthier over time, those on the left are generally poorer.
+
+PC2 (y-axis): Captures growth vs. stagnation — higher PC2 scores indicate consistent GDP growth, while lower or negative scores indicate stagnation or decline in GDP trends.
+
+Sub-Saharan Africa (pink):
+
+Clusters far left on PC1 — lowest overall GDP levels.
+Spread vertically — some countries are growing (upper half), many are stagnating or declining (lower half).
+High variance in development trajectories.
+
+Europe and Central Asia (yellow):
+
+Concentrated on the right side — wealthier economies.
+Slight upward tilt — moderate and consistent growth patterns.
+Some outliers near the top indicate strong post-2000 growth (e.g., Eastern Europe).
+
+East Asia and Pacific (light red):
+
+Broad horizontal spread — economic diversity in the region (includes both Japan and Cambodia).
+Many in the upper half — reflecting strong upward trends (e.g., China, Vietnam).
+
+Latin America and Caribbean (green):
+
+Middle-left horizontally — middle-income economies.
+Mostly near 0 or below in PC2 — suggests sluggish or inconsistent growth.
+Could reflect effects of economic crises or political instability.
+
+South Asia (purple):
+
+Closer to the middle, with some points high on PC2 — suggests modest to strong growth from a lower base (e.g., India, Bangladesh).
+
+North America (blue):
+
+Few data points, all far right — high income and relatively stable (not much variation in PC2).
+
+Middle East and North Africa (turquoise):
+
+Center-right in PC1, more scattered vertically — mix of wealthy oil-rich countries and poorer ones with varied growth paths.
+
+
+#-------------------------------------------------------------------------------Factor-Analysis Code-------------------------------------------------------------------------------------------
+
+```{r}
+# Standardizing log-transformed data
+gdp_data_scaled <- scale(data_matrix)
+
+summary(gdp_data_scaled)
+```
+
+
+Testing the Suitability of Data for Factor Analysis
+Before applying Factor Analysis, it is important to test whether the data meets the necessary assumptions.
+
+Bartlett’s Test of Sphericity:
+This test evaluates whether the correlation matrix significantly differs from an identity matrix (where variables are uncorrelated). A significant p-value (p < 0.05) indicates that the variables are sufficiently correlated for Factor Analysis.
+
+Kaiser-Meyer-Olkin (KMO) Measure of Sampling Adequacy:
+This measure quantifies the degree of common variance among variables. A KMO value greater than 0.6 is considered acceptable for proceeding with Factor Analysis.
+
+Both tests were applied to the standardized, log-transformed GDP per capita data.
+
+```{r}
+# Install if not installed
+if (!require(psych)) install.packages("psych")
+library(psych)
+
+# Bartlett’s Test of Sphericity
+bartlett_test <- cortest.bartlett(cor(gdp_data_scaled), n = nrow(gdp_data_scaled))
+print(bartlett_test)
+
+# KMO Test
+kmo_result <- KMO(cor(gdp_data_scaled))
+print(kmo_result)
+```
+
+**Interpretation**
+he Kaiser-Meyer-Olkin (KMO) measure of sampling adequacy was computed to evaluate the suitability of the data for Factor Analysis. The results showed:
+An overall KMO value of 0.97, which is considered excellent according to standard thresholds.
+Individual Measure of Sampling Adequacy (MSA) values for each year were all greater than 0.94.
+These results indicate that the dataset has a high proportion of common variance among variables, confirming that Factor Analysis is appropriate for this dataset.
+Bartlett’s Test of Sphericity was conducted to assess whether the correlation matrix significantly differed from an identity matrix, where variables would be uncorrelated. The results were:
+Chi-square statistic: 41,098.68
+Degrees of Freedom (df): 561
+p-value: < 0.001
+The extremely low p-value indicates that the variables are significantly correlated, thereby supporting the suitability of the dataset for Factor Analysis.
+
+**Finding the number of factors needed for this dataset**
+
+```{r}
+# Load psych package
+library(psych)
+
+#Calculate eigenvalues from the correlation matrix
+ev <- eigen(cor(gdp_data_scaled))$values
+
+#Print eigenvalues
+print(ev)
+
+#Scree plot (for visual inspection)
+plot(ev, type = "b", main = "Scree Plot of Eigenvalues", 
+     xlab = "Component Number", ylab = "Eigenvalue", pch = 19)
+abline(h = 1, col = "red", lty = 2)  # horizontal line at eigenvalue = 1
+
+#Cumulative proportion of variance explained
+cum_var_explained <- cumsum(ev) / sum(ev)
+print(cum_var_explained)
+
+#Plot cumulative variance explained
+plot(cum_var_explained, type = "b", main = "Cumulative Variance Explained",
+     xlab = "Number of Factors", ylab = "Cumulative Proportion of Variance", pch = 19)
+abline(h = 0.8, col = "blue", lty = 2)  # reference line at 80%
+abline(h = 0.9, col = "green", lty = 2) # reference line at 90%
+```
+**Interpretation**
+The number of factors to extract was determined using multiple complementary methods:
+
+While the scree plot suggests a single dominant factor, we retained two factors to better explore potential secondary structure — particularly to align with our PCA results where the second component captured temporal GDP trends
+Thus, based on these methods, two factors was extracted for further analysis.
+```{r}
+# FA with 2 factors, no rotation
+fa_unrotated <- factanal(gdp_data_scaled, factors = 2, rotation = "none", scores = "regression")
+
+# FA with 2 factors, varimax rotation
+fa_rotated <- factanal(gdp_data_scaled, factors = 2, rotation = "varimax", scores = "regression")
+
+# Extract loading matrices
+load_unrotated <- as.matrix(fa_unrotated$loadings)
+load_rotated   <- as.matrix(fa_rotated$loadings)
+
+# Compare side by side
+round(cbind(
+  Unrotated_Factor1 = load_unrotated[, 1],
+  Unrotated_Factor2 = load_unrotated[, 2],
+  Rotated_Factor1 = load_rotated[, 1],
+  Rotated_Factor2 = load_rotated[, 2]
+), 3)
+```
+
+**Interpretation**
+When comparing PCA to Factor Analysis (FA), we initially observed that the unrotated FA results closely resembled PCA: the first factor/component captured the overall economic level across all years, while the second dimension reflected temporal variation, highlighting countries with stronger recent growth. This similarity is expected, as both PCA and unrotated FA are based on the correlation matrix and prioritize maximizing variance.
+
+However, after applying Varimax rotation, the FA solution became more interpretable but diverged structurally from PCA. The rotation redistributed the factor loadings such that Factor 2 loaded heavily on recent years (2010–2023) and Factor 1 on early years (1990s–early 2000s), forming a clean temporal separation. The rotated solution removed the sign contrast seen in PCA’s second component (which had both positive and negative loadings), but provided a clearer and more conceptually meaningful structure by distinguishing between historical and modern economic influence.
+
+Thus, while PCA identifies directions of maximal variance, rotated FA is better suited for uncovering latent economic patterns, especially when the goal is to interpret underlying time-based structures in the data, even if the axes no longer align one-to-one with PCA components.
+
+```{r}
+
+# Extract the loadings matrix
+loadings_matrix <- as.matrix(fa_rotated$loadings)
+
+# Compute variance explained by each factor
+# Square the loadings and sum column-wise
+variance_per_factor <- colSums(loadings_matrix^2)
+
+# Print variance explained by each factor
+print(variance_per_factor)
+
+# Proportion of total variance explained
+total_variance <- sum(variance_per_factor)
+prop_var_explained <- variance_per_factor / total_variance
+print(prop_var_explained)
+
+# Convert scores to data frame and add country names
+fa_scores <- as.data.frame(fa_rotated$scores)
+fa_scores$Country <- rownames(fa_rotated$scores)
+
+```
+```{r}
+# Get country names from your original dataset
+country_names <- data$Country
+
+#Combine scores with country names
+fa_scores <- as.data.frame(fa_rotated$scores)
+fa_scores <- cbind(Country = country_names, fa_scores)
+
+#Check structure
+head(fa_scores)
+```
+```{r}
+#install.packages("dplyr")
+
+highlighted_countries <- c("Luxembourg", "Switzerland", "Brunei", "United Arab Emirates",
+                           "Singapore", "China", "Somalia", "Burundi")
+fa_scores$label <- ifelse(fa_scores$Country %in% highlighted_countries,
+                          fa_scores$Country, NA)
+library(ggplot2)
+library(ggrepel)
+
+ggplot(fa_scores, aes(x = Factor1, y = Factor2, color = data$Region)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_text_repel(aes(label = label), size = 3.2, max.overlaps = 100) +
+  labs(
+    title = "Factor Analysis Score Plot: Country GDP Profiles",
+    subtitle = "Factor 1 = Early GDP | Factor 2 = Recent GDP",
+    x = "Factor 1 (Early GDP)",
+    y = "Factor 2 (Recent GDP)",
+    color = "Region"
+  ) +
+  theme_minimal(base_size = 13)
+```
+**Interpretation**
+Factor 1 = Early GDP Influence (1990s–2000s)
+
+Factor 2 = Recent GDP Influence (2010s–2023)
+
+This allows us to read the economic trajectory of each country based on their position in the plot.
+
+United States: Slightly off-center, right and high → wealthy early and now
+
+India: Near origin, moving up → modest GDP early, moderate recent gains
+
+European economies: Generally cluster mid-to-right on both axes
+Latin America: Many fall in the middle, suggesting stability but limited acceleration
+Countries projected into Factor 1 (early GDP strength) and Factor 2 (recent GDP strength) space from Factor Analysis.
+Top-right countries (e.g., Luxembourg, Qatar) show sustained wealth.
+Top-left (e.g., China, Singapore) represent rising economies.
+Bottom-right (e.g., Brunei) reflects early wealth that did not continue.
+Bottom-left contains persistently low-income countries (e.g., Burundi, DRC).
+
+```{r}
+
+fa_numeric <- fa_scores[, c("Factor1", "Factor2")]
+
+# FA scores
+wss_fa <- sapply(1:10, function(k) {
+  kmeans(fa_numeric, centers = k, nstart = 25)$tot.withinss
+})
+
+plot(1:10, wss_fa, type = "b", pch = 19,
+     main = "Elbow Method for FA Clustering",
+     xlab = "Number of Clusters K",
+     ylab = "Total Within-Cluster SS")
+```
+```{r}
+# Extract loadings and convert to data frame
+loadings_df <- as.data.frame(unclass(fa_rotated$loadings[, 1:2]))
+loadings_df$Year <- rownames(loadings_df)
+
+# Reshape for ggplot
+library(tidyr)
+library(dplyr)
+loadings_long <- pivot_longer(loadings_df, cols = c("Factor1", "Factor2"),
+                              names_to = "Factor", values_to = "Loading")
+
+# Plot
+library(ggplot2)
+
+ggplot(loadings_long, aes(x = Year, y = Loading, group = Factor, color = Factor)) +
+  geom_line(size = 1.2) +
+  geom_point() +
+  labs(title = "Factor Loadings per Year",
+       y = "Loading Value", x = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+```
+**Interpretation**
+The above plot shows how each year contributes to the two extracted factors from the Factor Analysis. Factor 2 exhibits a rising trend across time, indicating that it represents recent economic strength. Factor 1, by contrast, declines from 1990 through the 2020s, capturing historical economic dominance.
+
+This temporal separation confirms the latent structure discovered in the rotated Factor Analysis: countries with historically high GDPs (e.g., Brunei, UAE) are characterized by high Factor 1 scores, while those with rapidly improving economies in the past two decades (e.g., China) score highly on Factor 2. The opposing trends in factor loadings across time offer clear and interpretable insights into shifting global economic dynamics.
+
+Factor 1 (red line):
+
+Starts high in 1990 and declines steadily, bottoming out by the mid-2010s.
+
+Represents early GDP influence — historical economic strength.
+
+Factor 2 (blue line):
+
+Starts low in 1990 but increases consistently over time, peaking around 2018–2020.
+
+Represents recent GDP influence — modern economic strength.
+
+#################PCA and FA comparison################
+
+PCA and Factor Analysis both provided valuable, yet distinct, insights into the structure of GDP per capita data across countries and time. PCA emphasized overall wealth magnitude, with a dominant first component capturing nearly all variation. FA, on the other hand, revealed a clear latent structure that separated early vs modern economic strength through rotated factor loadings. While PCA was simpler and more stable, FA was more conceptually revealing, especially for identifying when a country exhibited economic strength. Together, these methods complement each other — PCA shows how much, and FA shows when and why.
+
+#------------------------------------------------------------------------t-SNE-Code------------------------------------------------------------------------------------------------------------
+
+```{r}
+#install.packages("Rtsne")
+tsne_input <- as.matrix(gdp_data_scaled)
+set.seed(42)
+tsne_result <- Rtsne(tsne_input, dims = 2, perplexity = 50, verbose = TRUE, max_iter = 1000)
+
+# Extract 2D coordinates and add country names
+tsne_df <- data.frame(
+  Dim1 = tsne_result$Y[,1],
+  Dim2 = tsne_result$Y[,2],
+  Country = data$Country  
+)
+```
+```{r}
+# Define the countries we want to label
+highlighted_countries <- c("Luxembourg", "Switzerland", "Brunei", "United Arab Emirates",
+                           "Singapore", "China", "Somalia", "Burundi")
+set.seed(42)
+
+tsne_df$label <- ifelse(tsne_df$Country %in% highlighted_countries, tsne_df$Country, NA)
+
+# Plot with selective labels
+library(ggplot2)
+library(ggrepel)
+
+ggplot(tsne_df, aes(x = Dim1, y = Dim2)) +
+  geom_point(color = "purple", alpha = 0.7, size = 3) +
+  geom_text_repel(aes(label = label), size = 3.2, max.overlaps = 100) +
+  labs(
+    title = "t-SNE Projection of Countries (GDP per Capita)",
+    subtitle = "Selected countries labeled for interpretability",
+    x = "t-SNE 1", y = "t-SNE 2"
+  ) +
+  theme_minimal()
+```
+```{r}
+#Run t-SNE with perplexity = 5
+tsne_res5 <- Rtsne(as.matrix(gdp_data_scaled), perplexity = 50)
+set.seed(42)
+#Create t-SNE dataframe with country and region info
+tsne5 <- data.frame(
+  Dim1 = tsne_res5$Y[, 1],
+  Dim2 = tsne_res5$Y[, 2],
+  Country = data$Country
+)
+
+# Add selective labeling for interpretation
+highlighted_countries <- c("Luxembourg", "Switzerland", "Brunei", "United Arab Emirates",
+                           "Singapore", "China", "Somalia", "Burundi")
+
+tsne5$label <- ifelse(tsne5$Country %in% highlighted_countries, tsne5$Country, NA)
+
+```
+
+```{r}
+
+set.seed(42)
+p5 <- ggplot(tsne5, aes(x = Dim1, y = Dim2, color = data$Region)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_text_repel(aes(label = label), size = 3.2, max.overlaps = 100) +
+  labs(
+    title = "t-SNE Projection of Countries (Perplexity = 50)",
+    subtitle = "Colored by Region, with selected countries labeled",
+    x = "t-SNE 1", y = "t-SNE 2"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+print(p5)
+```
+**Interpretation**
+
+As perplexity increases (from 20 to 50), the t-SNE layout expands, gradually revealing broader economic gradients. The distinction between low-income countries (e.g., Somalia, Burundi) and high-income countries (e.g., Luxembourg, Switzerland) becomes clearer and more structured. The projection at perplexity 40 and 50 shows a quasi-linear gradient from bottom-left to top-right (or right-to-left in flipped views), where countries are aligned along a global income spectrum. While regional clusters are still visible, countries begin to space out more smoothly along economic lines.
+
+Importantly, we observe that the axes flip and rotate across different perplexity values. For instance, the same cluster of Sub-Saharan African countries may appear in the top-right in one frame and bottom-left in another. This is a known and expected behavior in t-SNE since the method does not preserve axis orientation across runs. These transformations do not affect the underlying relationships between countries; their relative positions to one another remain consistent even when the coordinate system changes.
+
+**Final Interpretation**
+
+Each method comes with trade-offs. PCA is computationally efficient and mathematically transparent but assumes linearity and emphasizes global variance. FA offers strong interpretability through its modeling of latent structures but is sensitive to factor extraction and rotation choices. t-SNE excels at uncovering local patterns and nonlinear relationships but lacks stability and global interpretability, requiring careful control of perplexity and initialization.
+
+
